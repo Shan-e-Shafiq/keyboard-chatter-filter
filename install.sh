@@ -125,7 +125,9 @@ main() {
     mkdir -p "${tmp}/extract"
     tar -xzf "${tmp}/${asset}" -C "${tmp}/extract" "$PROGRAM"
     local binary="${tmp}/extract/${PROGRAM}"
-    [ -f "$binary" ] && [ ! -L "$binary" ] || die "the archive does not contain the ${PROGRAM} binary"
+    if [ ! -f "$binary" ] || [ -L "$binary" ]; then
+        die "the archive does not contain the ${PROGRAM} binary"
+    fi
     chmod 0755 "$binary"
 
     local dir target

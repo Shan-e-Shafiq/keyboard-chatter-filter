@@ -28,7 +28,10 @@ remove() {
 }
 
 remove_dir_if_empty() {
-    [ -d "$1" ] && ${SUDO:-} rmdir -- "$1" 2>/dev/null && echo "Removed $1" || true
+    # rmdir only succeeds on an empty directory, so nothing else is ever deleted.
+    if [ -d "$1" ] && ${SUDO:-} rmdir -- "$1" 2>/dev/null; then
+        echo "Removed $1"
+    fi
 }
 
 find_binary() {
