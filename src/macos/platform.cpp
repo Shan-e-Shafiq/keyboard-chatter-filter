@@ -150,6 +150,7 @@ int run(const CliOptions& options) {
     DaemonOptions daemon_options;
     daemon_options.config_path = options.config_path.value_or(default_config_path());
     daemon_options.log_level_override = options.log_level;
+    daemon_options.dry_run = options.dry_run;
     return run_daemon(daemon_options);
 }
 

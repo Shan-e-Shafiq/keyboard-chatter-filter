@@ -102,6 +102,12 @@ void notify_systemd(const std::string& message) {
              addr_length);
 }
 
+// Dry run: nothing is ever written anywhere.
+class NullOutput final : public IKeyboardOutput {
+public:
+    void emit(const KeyEvent&) override {}
+};
+
 class SessionScheduler final : public IWakeupScheduler {
 public:
     explicit SessionScheduler(bool& dirty) : dirty_(dirty) {}
@@ -143,6 +149,7 @@ private:
     void scan_devices();
     void consider_device(const std::filesystem::path& path);
     void add_session(EvdevDevice device);
+    void check_breakers();
     void remove_session(std::uint32_t id, const char* why);
     void remove_all_sessions();
     void flush_other_sessions(std::uint32_t except);
@@ -178,6 +185,9 @@ private:
     std::string uinput_error_;
     bool permission_warned_ = false;
     std::uint64_t suppressed_by_closed_sessions_ = 0;
+    std::uint64_t closed_session_gaps_[4] = {0, 0, 0, 0};
+    std::string safety_stop_;
+    NullOutput null_output_;
     DaemonState state_ = DaemonState::Starting;
     std::string detail_;
     std::chrono::steady_clock::time_point started_;
@@ -225,6 +235,7 @@ void Daemon::load_configuration(bool initial) {
     std::vector<std::uint32_t> now_ignored;
     for (auto& [id, session] : sessions_) {
         session.engine->update_settings(config_.filter_settings());
+        safety_stop_.clear();
         const Classification c = classify_device(session.keyboard->device().capabilities(), config_.ignored_devices);
         if (c.kind != DeviceKind::Keyboard) {
             now_ignored.push_back(id);
@@ -301,8 +312,11 @@ void Daemon::consider_device(const std::filesystem::path& path) {
 
 void Daemon::add_session(EvdevDevice device) {
     std::string error;
-    std::optional<UinputDevice> uinput = UinputDevice::create(device.capabilities(), error);
-    if (!uinput) {
+    std::optional<UinputDevice> uinput;
+    if (!options_.dry_run) {
+        uinput = UinputDevice::create(device.capabilities(), error);
+    }
+    if (!options_.dry_run && !uinput) {
         if (!uinput_failed_) {
             log::error("cannot create the filtered virtual keyboard: ", error,
                        ". Is the uinput kernel module available (modprobe uinput) and is the filter running as "
@@ -320,11 +334,14 @@ void Daemon::add_session(EvdevDevice device) {
     session.path = device.path();
     session.rdev = device.device_number();
     session.name = device.capabilities().name;
-    session.output = std::make_unique<UinputKeyboardOutput>(std::move(*uinput));
+    if (uinput) {
+        session.output = std::make_unique<UinputKeyboardOutput>(std::move(*uinput));
+    }
     session.scheduler = std::make_unique<SessionScheduler>(timer_dirty_);
-    session.engine = std::make_unique<FilterEngine>(config_.filter_settings(), *session.output, *session.scheduler,
+    IKeyboardOutput& engine_output = session.output ? static_cast<IKeyboardOutput&>(*session.output) : null_output_;
+    session.engine = std::make_unique<FilterEngine>(config_.filter_settings(), engine_output, *session.scheduler,
                                                     clock_);
-    session.keyboard = std::make_unique<EvdevKeyboard>(std::move(device), *session.output, id,
+    session.keyboard = std::make_unique<EvdevKeyboard>(std::move(device), session.output.get(), id,
                                                        [this, id] { flush_other_sessions(id); });
 
     const InterceptorStartResult started = session.keyboard->start(*session.engine);
@@ -333,12 +350,14 @@ void Daemon::add_session(EvdevDevice device) {
         return;  // the session (and its virtual keyboard) is discarded
     }
     if (!watch(session.keyboard->device().fd(), tag(Source::Device, id)) ||
-        !watch(session.output->device().fd(), tag(Source::Uinput, id))) {
+        (session.output && !watch(session.output->device().fd(), tag(Source::Uinput, id)))) {
         log::error("epoll_ctl failed: ", posix::errno_message(errno));
         unwatch(session.keyboard->device().fd());
         return;
     }
-    if (session.keyboard->waiting_for_release()) {
+    if (options_.dry_run) {
+        log::info("observing \"", session.name, "\" (", session.path.string(), ") in dry-run mode");
+    } else if (session.keyboard->waiting_for_release()) {
         log::info("found \"", session.name, "\" (", session.path.string(),
                   "); filtering starts once all its keys are released");
     } else {
@@ -356,11 +375,16 @@ void Daemon::remove_session(std::uint32_t id, const char* why) {
     }
     Session& session = it->second;
     unwatch(session.keyboard->device().fd());
-    unwatch(session.output->device().fd());
+    if (session.output) {
+        unwatch(session.output->device().fd());
+    }
     // Deliver anything held back while the virtual keyboard still exists, then let go.
     session.engine->flush();
     session.keyboard->stop();
     suppressed_by_closed_sessions_ += session.engine->filter().stats().chatter_suppressed;
+    for (int i = 0; i < 4; ++i) {
+        closed_session_gaps_[i] += session.engine->filter().stats().chatter_gap_histogram[i];
+    }
     log::info("stopped filtering \"", session.name, "\" (", why, ")");
     sessions_.erase(it);
     timer_dirty_ = true;
@@ -450,6 +474,17 @@ void Daemon::arm_retry() {
     ::timerfd_settime(retry_timer_.get(), 0, &spec, nullptr);
 }
 
+void Daemon::check_breakers() {
+    for (const auto& [id, session] : sessions_) {
+        if (session.engine->tripped() && safety_stop_.empty()) {
+            safety_stop_ = session.engine->trip_reason();
+            log::error("SAFETY STOP on \"", session.name, "\": ", safety_stop_,
+                       ". Filtering of that keyboard is switched off and every key passes unchanged until the "
+                       "filter is restarted. Please report this.");
+        }
+    }
+}
+
 void Daemon::update_state() {
     if (!config_.enabled) {
         state_ = DaemonState::Disabled;
@@ -473,9 +508,19 @@ std::string Daemon::status_snapshot() const {
     s.enabled = config_.enabled;
     s.devices = static_cast<std::int64_t>(sessions_.size());
     s.suppressed = suppressed_by_closed_sessions_;
-    for (const auto& [id, session] : sessions_) {
-        s.suppressed += session.engine->filter().stats().chatter_suppressed;
+    for (int i = 0; i < 4; ++i) {
+        s.chatter_gaps[i] = closed_session_gaps_[i];
     }
+    for (const auto& [id, session] : sessions_) {
+        const FilterStats& stats = session.engine->filter().stats();
+        s.suppressed += stats.chatter_suppressed;
+        for (int i = 0; i < 4; ++i) {
+            s.chatter_gaps[i] += stats.chatter_gap_histogram[i];
+        }
+    }
+    s.dry_run = options_.dry_run;
+    s.safety_stop = safety_stop_;
+    s.timing = "kernel event timestamps (CLOCK_MONOTONIC)";
     s.config_path = options_.config_path.string();
     s.config_problems = static_cast<std::int64_t>(config_problems_);
     s.uptime_seconds =
@@ -553,7 +598,8 @@ int Daemon::run() {
         log::error("not starting: ", error);
         return 3;
     }
-    log::info(build::kProgramName, ' ', build::kVersion, " starting (pid ", ::getpid(), ")");
+    log::info(build::kProgramName, ' ', build::kVersion, " starting (pid ", ::getpid(), ")",
+              options_.dry_run ? " in dry-run mode (keyboards are observed, not grabbed)" : "");
     load_configuration(true);
     if (!setup(error)) {
         log::error(error);
@@ -594,6 +640,7 @@ int Daemon::run() {
                     if (it->second.keyboard->on_readable() == EvdevKeyboard::ReadStatus::Gone || hangup) {
                         remove_session(id, "disconnected");
                     }
+                    check_breakers();
                     break;
                 }
                 case Source::Uinput: {

@@ -93,6 +93,9 @@ bool WinKeyboardInterceptor::handle(const KBDLLHOOKSTRUCT& raw) {
     output_.begin_hook();
     const Decision decision = handler_->on_key_event(*key);
     const bool reinject_current = output_.end_hook();
+    if (dry_run_) {
+        return false;
+    }
 
     switch (decision) {
         case Decision::Accept:

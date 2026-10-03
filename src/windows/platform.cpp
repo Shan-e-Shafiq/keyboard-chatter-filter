@@ -153,6 +153,7 @@ int run(const CliOptions& options) {
     AgentOptions agent;
     agent.config_path = options.config_path.value_or(default_config_path());
     agent.log_level_override = options.log_level;
+    agent.dry_run = options.dry_run;
     return run_agent(agent);
 }
 

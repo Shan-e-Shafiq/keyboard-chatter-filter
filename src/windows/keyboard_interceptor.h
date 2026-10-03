@@ -32,6 +32,9 @@ public:
     void stop() noexcept override;
     [[nodiscard]] bool is_active() const noexcept override { return hook_ != nullptr; }
 
+    // Dry run: events are classified (and counted) but never blocked.
+    void set_dry_run(bool dry_run) noexcept { dry_run_ = dry_run; }
+
 private:
     static LRESULT CALLBACK hook_proc(int code, WPARAM wparam, LPARAM lparam);
     bool handle(const KBDLLHOOKSTRUCT& event);  // true = block the event
@@ -41,6 +44,7 @@ private:
     IKeyEventHandler* handler_ = nullptr;
     HHOOK hook_ = nullptr;
     ModifierState modifiers_;
+    bool dry_run_ = false;
 };
 
 }  // namespace kcf::windows

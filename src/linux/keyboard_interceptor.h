@@ -23,7 +23,8 @@ namespace kcf::linux_input {
 // that saw the press), and it disappears automatically if this process exits for any reason.
 class EvdevKeyboard final : public IKeyboardInterceptor {
 public:
-    EvdevKeyboard(EvdevDevice device, UinputKeyboardOutput& output, DeviceId id,
+    // `output` null = dry run: the device is not grabbed, its events are only observed and counted.
+    EvdevKeyboard(EvdevDevice device, UinputKeyboardOutput* output, DeviceId id,
                   std::function<void()> before_key_event);
     ~EvdevKeyboard() override;
     EvdevKeyboard(const EvdevKeyboard&) = delete;
@@ -31,7 +32,9 @@ public:
 
     InterceptorStartResult start(IKeyEventHandler& handler) override;
     void stop() noexcept override;
-    [[nodiscard]] bool is_active() const noexcept override { return device_.grabbed(); }
+    [[nodiscard]] bool is_active() const noexcept override {
+        return device_.grabbed() || (output_ == nullptr && handler_ != nullptr);
+    }
     [[nodiscard]] bool waiting_for_release() const noexcept { return waiting_for_release_; }
 
     enum class ReadStatus { Ok, Gone };
@@ -51,7 +54,7 @@ private:
     bool try_grab(std::string& error);
 
     EvdevDevice device_;
-    UinputKeyboardOutput& output_;
+    UinputKeyboardOutput* output_;
     DeviceId id_;
     std::function<void()> before_key_event_;
     IKeyEventHandler* handler_ = nullptr;

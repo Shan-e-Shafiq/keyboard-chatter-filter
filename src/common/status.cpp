@@ -77,7 +77,12 @@ std::string serialize_status(const DaemonStatus& s) {
         << "suppressed=" << s.suppressed << '\n'
         << "config_path=" << sanitize(s.config_path) << '\n'
         << "config_problems=" << s.config_problems << '\n'
-        << "uptime_seconds=" << s.uptime_seconds << '\n';
+        << "uptime_seconds=" << s.uptime_seconds << '\n'
+        << "dry_run=" << (s.dry_run ? "true" : "false") << '\n'
+        << "safety_stop=" << sanitize(s.safety_stop) << '\n'
+        << "chatter_gaps=" << s.chatter_gaps[0] << ',' << s.chatter_gaps[1] << ',' << s.chatter_gaps[2] << ','
+        << s.chatter_gaps[3] << '\n'
+        << "timing=" << sanitize(s.timing) << '\n';
     return out.str();
 }
 
@@ -122,6 +127,19 @@ std::optional<DaemonStatus> parse_status(std::string_view text) {
             ok = parse_number(value, s.config_problems);
         } else if (key == "uptime_seconds") {
             ok = parse_number(value, s.uptime_seconds);
+        } else if (key == "dry_run") {
+            s.dry_run = value == "true";
+        } else if (key == "safety_stop") {
+            s.safety_stop = std::string(value);
+        } else if (key == "chatter_gaps") {
+            std::string_view rest = value;
+            for (int i = 0; i < 4 && ok; ++i) {
+                const std::size_t comma = rest.find(',');
+                ok = parse_number(rest.substr(0, comma), s.chatter_gaps[i]);
+                rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+            }
+        } else if (key == "timing") {
+            s.timing = std::string(value);
         }
         // Unknown keys are ignored so newer daemons can add fields.
         if (!ok) {
@@ -146,7 +164,22 @@ std::string describe_status(const DaemonStatus& s) {
     if (s.devices >= 0) {
         out << "  Keyboards:   " << s.devices << '\n';
     }
-    out << "  Suppressed:  " << s.suppressed << " chatter keystroke(s) since start\n";
+    if (!s.safety_stop.empty()) {
+        out << "  SAFETY STOP: filtering was switched off automatically (" << s.safety_stop
+            << "). The keyboard is unfiltered. Please report this; 'restart' re-arms it.\n";
+    }
+    if (s.dry_run) {
+        out << "  Dry run:     observing only; nothing is dropped. Counts show what would be removed.\n";
+    }
+    out << "  Suppressed:  " << s.suppressed << " chatter keystroke(s) since start";
+    if (s.suppressed > 0) {
+        out << " (gaps <5 ms: " << s.chatter_gaps[0] << ", 5-10: " << s.chatter_gaps[1] << ", 10-20: "
+            << s.chatter_gaps[2] << ", >=20: " << s.chatter_gaps[3] << ")";
+    }
+    out << '\n';
+    if (!s.timing.empty()) {
+        out << "  Timing:      " << s.timing << '\n';
+    }
     out << "  Config:      " << (s.config_path.empty() ? "(defaults)" : s.config_path);
     if (s.config_problems > 0) {
         out << " (" << s.config_problems << " problem(s); see the log or run `keyboard-chatter-filter config`)";

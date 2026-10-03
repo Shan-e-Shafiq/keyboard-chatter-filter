@@ -18,6 +18,7 @@
 #include "keyboard_filter/filter_engine.h"
 #include "macos/keyboard_interceptor.h"
 #include "macos/keyboard_output.h"
+#include "macos/event_conversion.h"
 #include "macos/mach_clock.h"
 #include "macos/paths.h"
 
@@ -120,6 +121,16 @@ private:
     dispatch_source_t source_ = nullptr;
 };
 
+// macOS policy: key-ups pass immediately and modifier keys are never touched, so the filter only
+// ever removes complete press/release pairs and never has to inject an event into the system's
+// input stream (re-injected events could leave a key or modifier stuck if anything went wrong).
+FilterSettings platform_settings(const Configuration& config) {
+    FilterSettings settings = config.filter_settings();
+    settings.release_mode = ReleaseMode::Immediate;
+    settings.filter_modifiers = false;
+    return settings;
+}
+
 // launchd sets XPC_SERVICE_NAME to the job label for the processes it starts.
 bool launched_by_launchd() {
     const char* service = std::getenv("XPC_SERVICE_NAME");
@@ -139,8 +150,20 @@ public:
 
     int run();
 
-    // IKeyEventHandler: forwards to the engine, watching for a tap macOS refused to re-enable.
-    Decision on_key_event(const KeyEvent& event) override { return engine_.on_key_event(event); }
+    // IKeyEventHandler: forwards to the engine, watching for a tap macOS refused to re-enable and
+    // for the engine's safety circuit breaker.
+    Decision on_key_event(const KeyEvent& event) override {
+        const Decision decision = engine_.on_key_event(event);
+        if (engine_.tripped() && !reported_trip_) {
+            reported_trip_ = true;
+            state_ = DaemonState::Error;
+            detail_ = std::string("safety stop: ") + engine_.trip_reason();
+            log::error("SAFETY STOP: ", engine_.trip_reason(),
+                       ". Filtering is switched off and every key passes unchanged until the filter is "
+                       "restarted. Please report this.");
+        }
+        return decision;
+    }
     void on_events_lost() override {
         engine_.on_events_lost();
         output_.clear();
@@ -189,6 +212,7 @@ private:
     DaemonState state_ = DaemonState::Starting;
     std::string detail_;
     bool prompted_for_permission_ = false;
+    bool reported_trip_ = false;
     int start_failures_ = 0;
     int exit_code_ = 0;
     std::chrono::steady_clock::time_point started_;
@@ -207,7 +231,7 @@ void Daemon::load_configuration(bool initial) {
     if (initial) {
         log::info("configuration ", result.file_found ? options_.config_path.string() : "(defaults)",
                   ": threshold ", config_.chatter_threshold.count(), " ms, ", config_.enabled ? "enabled" : "disabled");
-        engine_.update_settings(config_.filter_settings());
+        engine_.update_settings(platform_settings(config_));
         return;
     }
     if (config_ == previous) {
@@ -216,7 +240,8 @@ void Daemon::load_configuration(bool initial) {
     }
     log::info("configuration applied: threshold ", config_.chatter_threshold.count(), " ms, ",
               config_.enabled ? "enabled" : "disabled");
-    engine_.update_settings(config_.filter_settings());
+    engine_.update_settings(platform_settings(config_));
+    reported_trip_ = false;
     output_.clear();
     if (config_.enabled && !interceptor_.is_active()) {
         start_interception();
@@ -243,9 +268,10 @@ void Daemon::start_interception() {
     if (result.ok()) {
         const bool was_waiting = state_ == DaemonState::WaitingForPermission;
         state_ = DaemonState::Active;
-        detail_.clear();
+        detail_ = options_.dry_run ? "dry run" : "";
         start_failures_ = 0;
-        log::info(was_waiting ? "Accessibility permission granted; " : "", "keyboard filtering active");
+        log::info(was_waiting ? "Accessibility permission granted; " : "",
+                  options_.dry_run ? "dry run active: observing only, nothing is dropped" : "keyboard filtering active");
         return;
     }
 
@@ -303,7 +329,21 @@ std::string Daemon::status_snapshot() const {
     s.threshold_ms = config_.chatter_threshold.count();
     s.enabled = config_.enabled;
     s.devices = -1;  // event taps see all keyboards merged
-    s.suppressed = engine_.filter().stats().chatter_suppressed;
+    const FilterStats& stats = engine_.filter().stats();
+    s.suppressed = stats.chatter_suppressed;
+    for (int i = 0; i < 4; ++i) {
+        s.chatter_gaps[i] = stats.chatter_gap_histogram[i];
+    }
+    s.dry_run = options_.dry_run;
+    if (engine_.tripped()) {
+        s.safety_stop = engine_.trip_reason();
+    }
+    for (const TimestampSource source :
+         {TimestampSource::EventNanoseconds, TimestampSource::EventTicks, TimestampSource::Arrival}) {
+        if (const auto n = interceptor_.timestamp_source_count(source); n > 0) {
+            s.timing += (s.timing.empty() ? "" : ", ") + std::string(to_string(source)) + " x" + std::to_string(n);
+        }
+    }
     s.config_path = options_.config_path.string();
     s.config_problems = static_cast<std::int64_t>(config_problems_);
     s.uptime_seconds =
@@ -325,7 +365,10 @@ int Daemon::run() {
         return 3;
     }
 
-    log::info(build::kProgramName, ' ', build::kVersion, " starting (pid ", ::getpid(), ")");
+    log::info(build::kProgramName, ' ', build::kVersion, " starting (pid ", ::getpid(), ")",
+              options_.dry_run ? " in dry-run mode" : "");
+    interceptor_.set_dry_run(options_.dry_run);
+    output_.set_dry_run(options_.dry_run);
     load_configuration(true);
 
     if (!status_server_.open(paths_.status_socket, 0600, error)) {

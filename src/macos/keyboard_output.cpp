@@ -19,6 +19,9 @@ void MacKeyboardOutput::clear() noexcept {
 }
 
 void MacKeyboardOutput::emit(const KeyEvent& event) {
+    if (dry_run_) {
+        return;
+    }
     CFRef<CGEventRef> native;
     if (event.code < kSlots && stash_[event.code]) {
         native = std::move(stash_[event.code]);

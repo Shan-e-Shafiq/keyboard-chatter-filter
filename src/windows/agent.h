@@ -15,6 +15,7 @@ struct AgentOptions {
     std::optional<LogLevel> log_level_override;
     HANDLE stop_event = nullptr;    // signalled by the service to stop (inherited); console Ctrl+C otherwise
     HANDLE reload_event = nullptr;  // signalled by the service to reload the configuration (inherited)
+    bool dry_run = false;           // observe and count only; never block anything
 };
 
 // Exit codes the service supervisor understands.

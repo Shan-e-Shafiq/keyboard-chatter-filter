@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "keyboard_filter/keyboard_io.h"
+#include "macos/event_conversion.h"
 
 namespace kcf::macos {
 
@@ -14,6 +15,8 @@ public:
     MachClock();
     [[nodiscard]] Timestamp now() const noexcept override;
     [[nodiscard]] Timestamp from_event_timestamp(std::uint64_t event_timestamp) const noexcept;
+    // The event's own timestamp if plausible, otherwise "now" (see resolve_event_timestamp()).
+    [[nodiscard]] ResolvedTimestamp resolve(std::uint64_t event_timestamp) const noexcept;
 
 private:
     std::uint32_t numer_ = 1;

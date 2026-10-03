@@ -34,6 +34,10 @@ struct DaemonStatus {
     std::string config_path;
     std::int64_t config_problems = 0;
     std::int64_t uptime_seconds = 0;
+    bool dry_run = false;              // observing only: nothing is dropped
+    std::string safety_stop;           // non-empty: the circuit breaker disabled filtering, and why
+    std::uint64_t chatter_gaps[4] = {0, 0, 0, 0};  // suppressed release-to-press gaps: <5, 5-10, 10-20, >=20 ms
+    std::string timing;                // where event times come from (diagnostics)
 };
 
 [[nodiscard]] std::string serialize_status(const DaemonStatus& status);

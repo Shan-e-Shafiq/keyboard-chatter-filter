@@ -6,6 +6,7 @@
 // Carbon's <HIToolbox/Events.h> (kVK_*); they are part of the stable macOS ABI.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 
@@ -72,5 +73,26 @@ enum class NativeType : std::uint32_t {
                                               std::uint32_t timebase_numer, std::uint32_t timebase_denom) noexcept;
 
 [[nodiscard]] std::uint64_t ticks_to_ns(std::uint64_t ticks, std::uint32_t numer, std::uint32_t denom) noexcept;
+
+enum class TimestampSource : std::uint8_t {
+    EventNanoseconds,  // the event's own timestamp, reported in nanoseconds
+    EventTicks,        // the event's own timestamp, reported in mach ticks
+    Arrival,           // the event's timestamp was unusable; time the event reached the tap
+};
+
+struct ResolvedTimestamp {
+    Timestamp time;
+    TimestampSource source;
+};
+
+// The time to use for an event: its own timestamp when that is plausible (not in the future and at
+// most kMaxEventAge old), otherwise the arrival time. Events can carry a zero or otherwise bogus
+// timestamp; trusting it would make every re-press look like a 0 ms bounce.
+inline constexpr std::chrono::milliseconds kMaxEventAge{2000};
+[[nodiscard]] ResolvedTimestamp resolve_event_timestamp(std::uint64_t event_timestamp, std::uint64_t now_ticks,
+                                                        std::uint32_t timebase_numer,
+                                                        std::uint32_t timebase_denom) noexcept;
+
+[[nodiscard]] const char* to_string(TimestampSource source) noexcept;
 
 }  // namespace kcf::macos

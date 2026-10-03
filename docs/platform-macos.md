@@ -30,7 +30,7 @@ the user has explicitly trusted under **Accessibility**.
 
 | What | Where | Why |
 |---|---|---|
-| **Accessibility** (required) | System Settings → Privacy & Security → Accessibility | An *active* event tap (`kCGEventTapOptionDefault`, able to drop events) and posting the held-back key-up events require it. |
+| **Accessibility** (required) | System Settings → Privacy & Security → Accessibility | An *active* event tap (`kCGEventTapOptionDefault`, able to drop events) requires it. |
 | Input Monitoring | not requested | Only needed for *listen-only* taps. |
 | Root / administrator | not needed | Everything runs as the logged-in user. |
 
@@ -80,19 +80,34 @@ macOS remembers the permission for a specific code identity:
 ## Event handling details
 
 * The tap sits at the HID level (`kCGHIDEventTap`, head of the chain), before session-level tools and
-  every application, and listens to `keyDown`, `keyUp` and `flagsChanged` only. Mouse, media keys
-  (system-defined events) and everything else are never touched.
-* Modifier keys arrive as `flagsChanged`; whether the key went down or up is read from its
-  left/right-specific flag bit, so the two Shift (Command, Option, Control) keys are distinguished.
-* **Caps Lock is not filtered**: macOS toggles the lock state inside the HID system before any event
-  tap sees the event, so dropping it would only desynchronise the state.
+  every application, and listens to `keyDown` and `keyUp` only. Modifier keys (`flagsChanged`),
+  Caps Lock, mouse, media keys and everything else are never touched.
+* **Immediate release mode**: key-ups pass at once and a re-press inside the threshold is dropped
+  together with its key-up. The filter never creates, delays or re-posts an event; it can only remove
+  a complete press/release pair. (An earlier development build held key-ups back and re-posted them;
+  on a real Mac that left keys unusable, which led to this design and to the safety circuit breaker.)
 * Key repeat is recognised from `kCGKeyboardEventAutorepeat`.
 * Only events from the HID system are filtered. Software-generated events (password managers'
   auto-type, remote desktop, automation tools) pass untouched.
-* Event timestamps are converted to nanoseconds of `mach_absolute_time` whether the system reports
-  them as nanoseconds or as mach ticks.
+* An event's own timestamp is used only when plausible (in the past, at most 2 s old); otherwise
+  the arrival time is used. Timestamps are accepted in nanoseconds or mach ticks. `status` shows the
+  source in use (*Timing*).
 * If macOS disables the tap (callback too slow, or *Secure Event Input* is active), the filter
   re-enables it and resets its per-key state.
+* **Safety circuit breaker**: if a key's deliberate presses keep being dropped, filtering switches
+  itself off (`status` shows *SAFETY STOP*) and every key passes unchanged until `restart`.
+
+## Dry run
+
+`keyboard-chatter-filter run --dry-run` observes and counts without dropping anything, a safe way
+to see what the filter would remove on your keyboard (`status` shows the counts and the gap
+histogram). From a terminal, the terminal app needs Accessibility; to run it under launchd instead:
+
+```sh
+launchctl submit -l keyboard-chatter-filter-dryrun -- ~/.local/bin/keyboard-chatter-filter run --dry-run
+keyboard-chatter-filter status
+launchctl remove keyboard-chatter-filter-dryrun
+```
 
 ## Limitations
 
@@ -100,9 +115,11 @@ macOS remembers the permission for a specific code identity:
   macOS withholds keyboard events from all event taps. Chatter is not filtered there.
 * **Fast user switching**: each logged-in user runs their own instance through their own
   LaunchAgent.
-* If the filter process is killed while a key-up is being held back (≤ 30 ms window), that one
-  key-up is lost; applications that track key state may consider the key held until it is pressed
-  again. The keyboard itself keeps working: macOS removes a dead process's event tap automatically.
+* **Held keys on a bouncing switch**: if a held key bounces, applications see it released early and
+  its auto-repeat stops for that press. Characters are never doubled or lost by this.
+* Chatter on modifier keys and Caps Lock is not filtered (it produces no extra characters).
+* If the filter process dies, macOS removes its event tap automatically and the keyboard keeps
+  working unfiltered.
 
 ## Manual verification checklist
 
@@ -110,10 +127,12 @@ Hosted CI cannot grant Accessibility access, so the end-to-end path is verified 
 
 1. `bash install.sh` (or the curl one-liner); grant Accessibility when prompted.
 2. `keyboard-chatter-filter status` → `State: active`.
-3. Type normally in TextEdit, including fast double letters ("bookkeeper") and Shift-capitalised
+3. Optional first step: a dry run (see above) while typing normally; `status` should show few or no
+   would-be suppressions, with gaps mostly under 10 ms, and no safety stop.
+4. Type normally in TextEdit, including fast double letters ("bookkeeper") and Shift-capitalised
    words; hold a letter to auto-repeat; hold an arrow key.
-4. With a chattering keyboard (or a test keyboard), confirm doubled letters disappear and
+5. With a chattering keyboard (or a test keyboard), confirm doubled letters disappear and
    `status` shows a growing *Suppressed* count.
-5. Log out and in, or reboot: `status` → active again.
-6. `keyboard-chatter-filter uninstall`; `launchctl print gui/$(id -u)/keyboard-chatter-filter`
+6. Log out and in, or reboot: `status` → active again.
+7. `keyboard-chatter-filter uninstall`; `launchctl print gui/$(id -u)/keyboard-chatter-filter`
    reports the service is not found.

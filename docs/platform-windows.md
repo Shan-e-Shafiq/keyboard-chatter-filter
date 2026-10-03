@@ -53,12 +53,14 @@ flowchart LR
   further presses of a key that is already down.
 * Timestamps come from `QueryPerformanceCounter` at hook time (the hook's own `time` field has
   10–16 ms resolution, too coarse for a 30 ms window).
-* Held-back releases are re-injected with `SendInput` from the message loop, never inside the hook
-  procedure. If a held-back **modifier** release must reach applications before the current event
-  (Shift released just before the next letter), the current event is blocked and both are injected
-  in order.
+* **Immediate release mode**, as on macOS: key-ups pass at once, a re-press inside the threshold is
+  blocked together with its key-up, and modifier keys are never touched. Nothing is ever re-injected
+  with `SendInput`, so the filter can only remove complete press/release pairs.
 * Caps Lock, Num Lock and Scroll Lock are filtered like any other key: Windows toggles the lock state
   only when the key-down is delivered, so dropping a chatter press also prevents a double toggle.
+* **Safety circuit breaker**: if a key's deliberate presses keep being dropped, filtering switches
+  itself off (logged as *SAFETY STOP*) until the agent restarts.
+* `keyboard-chatter-filter run --dry-run` observes and counts without blocking anything.
 * Low-level hooks that ever exceed the system's hook timeout are silently removed by Windows. The
   agent reinstalls its hook after the session is unlocked and after resume from sleep.
 
@@ -67,14 +69,13 @@ flowchart LR
 * **Elevated windows.** Windows' User Interface Privilege Isolation prevents a normal-integrity hook
   from intercepting input destined for elevated (administrator) windows and the UAC/secure desktop.
   Keystrokes there are not filtered (they are not blocked either).
-* **Injected events.** Some events are re-delivered with `SendInput`, which marks them as injected.
-  Software that deliberately ignores injected input (some anti-cheat systems) may miss those
-  events. Releases of ordinary keys are delayed by at most the threshold; only events directly
-  following a modifier release are re-injected.
+* **Held keys on a bouncing switch**: if a held key bounces, applications see it released early and
+  its auto-repeat stops for that press. Chatter on modifier keys is not filtered.
 * **Hook ordering.** If other software also installs low-level keyboard hooks (remappers such as
   AutoHotkey or kanata), the most recently installed hook runs first. Chatter-filtered input should
   reach remappers, so start the filter before them, or use the remapper's own debounce.
-* A **kernel-mode filter driver** would remove the first two limitations. The adapter boundary
+* A **kernel-mode filter driver** would remove the elevated-window limitation and allow deferred
+  release mode. The adapter boundary
   (`IKeyboardInterceptor`/`IKeyboardOutput`) is designed so a driver-based adapter can replace the
   hook without touching the filter. It is not implemented: a production driver requires Microsoft
   attestation signing.

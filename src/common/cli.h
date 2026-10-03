@@ -33,6 +33,7 @@ struct CliOptions {
     std::optional<std::filesystem::path> config_path;  // --config
     std::optional<LogLevel> log_level;                 // --log-level (run)
     bool purge = false;                                // --purge (uninstall)
+    bool dry_run = false;                              // --dry-run (run): observe only, never drop
     std::optional<std::uint64_t> stop_event;           // --stop-event (Windows agent, inherited handle value)
     std::optional<std::uint64_t> reload_event;         // --reload-event (Windows agent, inherited handle value)
 };

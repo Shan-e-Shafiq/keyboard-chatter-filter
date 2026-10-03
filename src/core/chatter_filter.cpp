@@ -132,8 +132,27 @@ void ChatterFilter::update_settings(const FilterSettings& settings, IEventSink& 
     settings_ = settings;
 }
 
+Decision ChatterFilter::reject(RejectReason reason) noexcept {
+    last_reject_ = reason;
+    switch (reason) {
+        case RejectReason::Chatter:
+        case RejectReason::ChatterAfterRelease: ++stats_.chatter_suppressed; break;
+        case RejectReason::Duplicate: ++stats_.duplicates_suppressed; break;
+        case RejectReason::OrphanRepeat: ++stats_.repeats_suppressed; break;
+        case RejectReason::None: break;
+    }
+    return Decision::Reject;
+}
+
+void ChatterFilter::record_chatter_gap(Duration gap) noexcept {
+    using std::chrono::milliseconds;
+    const std::size_t bucket = gap < milliseconds(5) ? 0 : gap < milliseconds(10) ? 1 : gap < milliseconds(20) ? 2 : 3;
+    ++stats_.chatter_gap_histogram[bucket];
+}
+
 Decision ChatterFilter::process(const KeyEvent& event, IEventSink& sink) {
     ++stats_.events;
+    last_reject_ = RejectReason::None;
 
     // A release held back for another key goes out first: whatever this event is, applications
     // must observe it afterwards, exactly as the keys were physically operated.
@@ -141,7 +160,7 @@ Decision ChatterFilter::process(const KeyEvent& event, IEventSink& sink) {
         emit_pending(sink);
     }
 
-    if (!settings_.enabled || event.code >= kKeyCodeLimit) {
+    if (!settings_.enabled || event.code >= kKeyCodeLimit || (event.is_modifier() && !settings_.filter_modifiers)) {
         return Decision::Accept;
     }
 
@@ -181,18 +200,19 @@ Decision ChatterFilter::on_down(KeyState& key, const KeyEvent& event, Duration w
         // duplicate transition; OS auto-repeat only starts after the (much longer) repeat delay.
         // Later ones are auto-repeat on platforms that don't flag repeats (Windows).
         if (key.has_last_down && within_window(key.last_down, now, window)) {
-            ++stats_.duplicates_suppressed;
-            return Decision::Reject;
+            return reject(RejectReason::Duplicate);
         }
         if (key.logical_down) {
             return Decision::Accept;
         }
-        ++stats_.repeats_suppressed;
-        return Decision::Reject;
+        return reject(RejectReason::OrphanRepeat);
     }
 
     // A new physical press.
     const bool bounced = key.has_last_up && within_window(key.last_up, now, window);
+    if (bounced) {
+        record_chatter_gap(now >= key.last_up ? now - key.last_up : Duration::zero());
+    }
     key.physical_down = true;
     key.last_down = now;
     key.has_last_down = true;
@@ -201,8 +221,7 @@ Decision ChatterFilter::on_down(KeyState& key, const KeyEvent& event, Duration w
         if (bounced) {
             // Release + re-press inside the window: switch chatter. Drop both; the key stays held.
             cancel_pending();
-            ++stats_.chatter_suppressed;
-            return Decision::Reject;
+            return reject(RejectReason::Chatter);
         }
         // The window elapsed but the platform timer has not fired yet: deliver the release first.
         emit_pending(sink);
@@ -219,8 +238,7 @@ Decision ChatterFilter::on_down(KeyState& key, const KeyEvent& event, Duration w
         // The release was already delivered (another key intervened), so the bounce cannot be
         // merged into the original press anymore. Drop the spurious press and, later, its release.
         key.swallow_release = true;
-        ++stats_.chatter_suppressed;
-        return Decision::Reject;
+        return reject(RejectReason::ChatterAfterRelease);
     }
 
     key.logical_down = true;
@@ -244,8 +262,7 @@ Decision ChatterFilter::on_up(KeyState& key, const KeyEvent& event, Duration win
     if (!key.physical_down) {
         // Release without a press in between.
         if (key.release_pending || (key.has_last_up && within_window(key.last_up, now, window))) {
-            ++stats_.duplicates_suppressed;
-            return Decision::Reject;
+            return reject(RejectReason::Duplicate);
         }
         // A stray, stale release is harmless and can only help resynchronise applications.
         return Decision::Accept;
@@ -261,6 +278,12 @@ Decision ChatterFilter::on_up(KeyState& key, const KeyEvent& event, Duration win
     }
 
     if (!key.logical_down) {
+        return Decision::Accept;
+    }
+
+    if (settings_.release_mode == ReleaseMode::Immediate) {
+        // A bounce after this release is caught when the re-press arrives (swallow path).
+        key.logical_down = false;
         return Decision::Accept;
     }
 
@@ -284,8 +307,7 @@ Decision ChatterFilter::on_repeat(KeyState& key) {
         return Decision::Accept;
     }
     // Auto-repeat for a key applications consider released (its press was dropped as chatter).
-    ++stats_.repeats_suppressed;
-    return Decision::Reject;
+    return reject(RejectReason::OrphanRepeat);
 }
 
 void ChatterFilter::resync_key(KeyCode code, bool physically_down, Timestamp now, IEventSink& sink) {

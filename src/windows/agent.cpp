@@ -34,6 +34,16 @@ BOOL WINAPI console_handler(DWORD type) {
     return FALSE;
 }
 
+// Windows policy: key-ups pass immediately and modifier keys are never touched, so the filter only
+// ever blocks complete press/release pairs and never re-injects events with SendInput (re-injected
+// input could leave a key stuck, and some software ignores injected input).
+FilterSettings platform_settings(const Configuration& config) {
+    FilterSettings settings = config.filter_settings();
+    settings.release_mode = ReleaseMode::Immediate;
+    settings.filter_modifiers = false;
+    return settings;
+}
+
 class WaitableTimerScheduler final : public IWakeupScheduler {
 public:
     explicit WaitableTimerScheduler(const IClock& clock) : clock_(clock) {
@@ -89,6 +99,7 @@ private:
     Configuration config_;
     HWND window_ = nullptr;
     bool quit_ = false;
+    bool reported_trip_ = false;
 };
 
 void Agent::load_configuration(bool initial) {
@@ -105,7 +116,8 @@ void Agent::load_configuration(bool initial) {
     }
     log::info("configuration ", initial ? "" : "applied ", result.file_found ? "" : "(defaults) ", ": threshold ",
               config_.chatter_threshold.count(), " ms, ", config_.enabled ? "enabled" : "disabled");
-    engine_.update_settings(config_.filter_settings());
+    engine_.update_settings(platform_settings(config_));
+    reported_trip_ = false;
     output_.send_queued();
     if (config_.enabled && !interceptor_.is_active()) {
         start_hook();
@@ -213,7 +225,9 @@ int Agent::run() {
         ::SetConsoleCtrlHandler(&console_handler, TRUE);
     }
 
-    log::info(build::kProgramName, ' ', build::kVersion, " starting (pid ", ::GetCurrentProcessId(), ")");
+    log::info(build::kProgramName, ' ', build::kVersion, " starting (pid ", ::GetCurrentProcessId(), ")",
+              options_.dry_run ? " in dry-run mode" : "");
+    interceptor_.set_dry_run(options_.dry_run);
     create_window();
     load_configuration(true);
 
@@ -256,6 +270,12 @@ int Agent::run() {
             ::DispatchMessageW(&msg);
         }
         output_.send_queued();
+        if (engine_.tripped() && !reported_trip_) {
+            reported_trip_ = true;
+            log::error("SAFETY STOP: ", engine_.trip_reason(),
+                       ". Filtering is switched off and every key passes unchanged until the filter is "
+                       "restarted. Please report this.");
+        }
     }
 
     log::info("stopping");

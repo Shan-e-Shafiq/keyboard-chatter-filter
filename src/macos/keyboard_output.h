@@ -38,6 +38,9 @@ public:
     // Drops stashed copies (after the filter state was reset and all releases were emitted).
     void clear() noexcept;
 
+    // Dry run: the filter's decisions are only counted; nothing is ever posted.
+    void set_dry_run(bool dry_run) noexcept { dry_run_ = dry_run; }
+
     [[nodiscard]] std::uint64_t post_failures() const noexcept { return post_failures_; }
 
 private:
@@ -46,6 +49,7 @@ private:
     std::array<CFRef<CGEventRef>, kSlots> stash_{};
     CGEventTapProxy proxy_ = nullptr;
     std::uint64_t post_failures_ = 0;
+    bool dry_run_ = false;
 };
 
 }  // namespace kcf::macos

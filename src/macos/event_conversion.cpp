@@ -129,4 +129,28 @@ Timestamp event_timestamp_to_ns(std::uint64_t event_timestamp, std::uint64_t now
     return Timestamp(static_cast<std::int64_t>(chosen));
 }
 
+ResolvedTimestamp resolve_event_timestamp(std::uint64_t event_timestamp, std::uint64_t now_ticks, std::uint32_t numer,
+                                          std::uint32_t denom) noexcept {
+    const Timestamp now(static_cast<std::int64_t>(ticks_to_ns(now_ticks, numer, denom)));
+    if (event_timestamp == 0) {
+        return {now, TimestampSource::Arrival};
+    }
+    const Timestamp candidate = event_timestamp_to_ns(event_timestamp, now_ticks, numer, denom);
+    const Duration age = now - candidate;
+    if (age < -Duration(std::chrono::milliseconds(1)) || age > Duration(kMaxEventAge)) {
+        return {now, TimestampSource::Arrival};
+    }
+    const bool as_ticks = numer != denom && denom != 0 && candidate.count() != static_cast<std::int64_t>(event_timestamp);
+    return {candidate, as_ticks ? TimestampSource::EventTicks : TimestampSource::EventNanoseconds};
+}
+
+const char* to_string(TimestampSource source) noexcept {
+    switch (source) {
+        case TimestampSource::EventNanoseconds: return "event timestamps (nanoseconds)";
+        case TimestampSource::EventTicks: return "event timestamps (mach ticks)";
+        case TimestampSource::Arrival: return "arrival time (event timestamps unusable)";
+    }
+    return "unknown";
+}
+
 }  // namespace kcf::macos

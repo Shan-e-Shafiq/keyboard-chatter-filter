@@ -84,6 +84,13 @@ TEST(Cli, StopEventOnlyForWindowsAgent) {
     EXPECT_FALSE(parse({"windows-agent", "--stop-event", "abc"}).options.has_value());
 }
 
+TEST(Cli, DryRunOnlyForRun) {
+    const auto r = parse({"run", "--dry-run"});
+    ASSERT_TRUE(r.options.has_value());
+    EXPECT_TRUE(r.options->dry_run);
+    EXPECT_FALSE(parse({"start", "--dry-run"}).options.has_value());
+}
+
 TEST(Cli, UnexpectedArgument) {
     EXPECT_FALSE(parse({"status", "extra"}).options.has_value());
 }
@@ -109,6 +116,11 @@ TEST(Status, RoundTrip) {
     s.config_path = "/home/u/.config/keyboard-chatter-filter/config.toml";
     s.config_problems = 1;
     s.uptime_seconds = 3700;
+    s.dry_run = true;
+    s.safety_stop = "a key's presses kept being dropped";
+    s.chatter_gaps[0] = 5;
+    s.chatter_gaps[3] = 2;
+    s.timing = "arrival time";
 
     const auto parsed = parse_status(serialize_status(s));
     ASSERT_TRUE(parsed.has_value());
@@ -123,6 +135,15 @@ TEST(Status, RoundTrip) {
     EXPECT_EQ(parsed->config_path, s.config_path);
     EXPECT_EQ(parsed->config_problems, 1);
     EXPECT_EQ(parsed->uptime_seconds, 3700);
+    EXPECT_TRUE(parsed->dry_run);
+    EXPECT_EQ(parsed->safety_stop, s.safety_stop);
+    EXPECT_EQ(parsed->chatter_gaps[0], 5u);
+    EXPECT_EQ(parsed->chatter_gaps[1], 0u);
+    EXPECT_EQ(parsed->chatter_gaps[3], 2u);
+    EXPECT_EQ(parsed->timing, "arrival time");
+    const std::string text = describe_status(*parsed);
+    EXPECT_NE(text.find("SAFETY STOP"), std::string::npos);
+    EXPECT_NE(text.find("Dry run"), std::string::npos);
 }
 
 TEST(Status, RejectsGarbage) {

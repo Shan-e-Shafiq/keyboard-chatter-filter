@@ -23,4 +23,8 @@ Timestamp MachClock::from_event_timestamp(std::uint64_t event_timestamp) const n
     return event_timestamp_to_ns(event_timestamp, mach_absolute_time(), numer_, denom_);
 }
 
+ResolvedTimestamp MachClock::resolve(std::uint64_t event_timestamp) const noexcept {
+    return resolve_event_timestamp(event_timestamp, mach_absolute_time(), numer_, denom_);
+}
+
 }  // namespace kcf::macos

@@ -32,9 +32,28 @@ That gap, measured per key, is what the filter uses. It deliberately does **not*
   release-to-press gap;
 * **chords and rollover**: other keys must never influence each other.
 
+## Two release modes
+
+The filter has two ways of handling key-ups, chosen per platform (not by the user):
+
+| Mode | Used on | Key-up | What a bounce costs | Can it ever create an event? |
+|---|---|---|---|---|
+| **Deferred** | Linux | held back for the window | nothing: the key stays held | yes, the held-back key-up later (into our own virtual keyboard) |
+| **Immediate** | macOS, Windows | passes at once | a held key may appear released early | **no**: only whole press/release pairs are ever dropped |
+
+On Linux the filter owns the virtual keyboard that applications read from, so delivering a key-up
+later is just a write to that device, verified end to end against the real kernel. On macOS and
+Windows a held-back key-up would have to be re-injected into the operating system's input stream.
+A fault anywhere on that path could leave a key or modifier logically held, which no safety check
+can reliably detect. Immediate mode never creates an event, so it can only ever remove a complete
+press/release pair; the worst possible failure is a missed keystroke. On these platforms modifier
+keys are also left untouched (their chatter produces no characters, and in immediate mode filtering
+it could release a held modifier early).
+
 ## Rules
 
-`threshold` (default 30 ms, configurable, optionally per key) is the *chatter window*.
+`threshold` (default 30 ms, configurable, optionally per key) is the *chatter window*. Rules 2 and 3
+apply to deferred mode; in immediate mode key-ups pass at once and rule 4 handles every bounce.
 
 1. **Presses are delivered immediately.** No latency is ever added to a key-down.
 2. **Releases are held back for the window.** When a key goes up, the release is kept for
@@ -80,6 +99,30 @@ stateDiagram-v2
 The filter keeps a fixed-size table indexed by key code (allocated once), so processing an event is
 O(1) and never allocates.
 
+## Safety circuit breaker
+
+Real chatter only ever removes extra transitions inside a burst lasting a few milliseconds; the next
+deliberate press of the key always gets through. `FilterEngine` watches for the opposite: a key
+whose *deliberate-looking* presses keep being dropped. A dropped press counts as "slow" when it comes
+at least `max(50 ms, 2 × threshold)` after that key's previous dropped press (bounces arrive
+milliseconds apart). After **4 slow drops of one key with no accepted press in between**, the
+engine concludes that its decisions are wrong, for example because the platform delivers unusable
+timestamps, and stops filtering: from then on every event passes unchanged until the filter is
+restarted or the configuration reloaded. The time is measured with the platform clock at
+processing time, never with event timestamps, since those may be exactly what is broken. The
+breaker is reported in `status` and the log.
+
+Bounces merged into a key that stays held (deferred mode) are never counted, because they cost the
+user nothing. Randomised tests with up to six bounces per transition (over a million simulated
+keystrokes) never trip the breaker, while a stream with constant timestamps trips it after four
+lost presses.
+
+## Event timestamps
+
+Timestamps are only trusted when plausible. On macOS an event's own timestamp is used if it lies in
+the past and is at most 2 seconds old; otherwise (for example a timestamp of 0) the arrival time at
+the event tap is used. `status` reports which source is in use.
+
 ## Timing and clocks
 
 * Timestamps come from the OS event where available (macOS event timestamps, Linux evdev events
@@ -95,9 +138,13 @@ O(1) and never allocates.
 
 ## Trade-offs
 
-* **Release latency.** A release reaches applications up to `threshold` ms late, unless another key
-  is pressed first (then immediately). Typing is unaffected: characters are produced on key-down.
-  Games that react to key-up see up to 30 ms extra delay on the last key released.
+* **Release latency (deferred mode, Linux).** A release reaches applications up to `threshold` ms
+  late, unless another key is pressed first (then immediately). Typing is unaffected: characters are
+  produced on key-down. Games that react to key-up see up to 30 ms extra delay on the last key
+  released. Immediate mode adds no latency at all.
+* **Held keys (immediate mode, macOS/Windows).** If a held key bounces, applications briefly see it
+  released and the re-press is dropped, so a long press may end early and auto-repeat for that press
+  stops. Typing a character is unaffected.
 * **Threshold choice.** No single value fits every keyboard. 30 ms removes typical chatter while
   leaving a wide margin below human same-key re-press times. Raise it if doubles still get through;
   lower it if intentional fast double-taps get merged. The core supports per-key thresholds for

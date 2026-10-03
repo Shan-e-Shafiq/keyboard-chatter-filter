@@ -117,6 +117,38 @@ TEST(MacOS, TickConversionDoesNotOverflow) {
     EXPECT_EQ(mac::ticks_to_ns(ticks, 125, 3), (ticks / 3) * 125 + (ticks % 3) * 125 / 3);
 }
 
+TEST(MacOS, ZeroTimestampFallsBackToArrivalTime) {
+    // Synthetic and some tapped events carry timestamp 0. Trusting it would make every re-press of
+    // a key look like a 0 ms bounce (each key would work only once).
+    const std::uint64_t now_ticks = 240'000'000'000ULL;
+    const auto r = mac::resolve_event_timestamp(0, now_ticks, 125, 3);
+    EXPECT_TRUE(r.source == mac::TimestampSource::Arrival);
+    EXPECT_EQ(r.time, Timestamp(static_cast<std::int64_t>(mac::ticks_to_ns(now_ticks, 125, 3))));
+}
+
+TEST(MacOS, ImplausibleTimestampsFallBackToArrivalTime) {
+    const std::uint64_t now_ticks = 240'000'000'000ULL;
+    const std::uint64_t now_ns = mac::ticks_to_ns(now_ticks, 125, 3);
+    // From the future, ancient, and garbage.
+    for (const std::uint64_t ts : {now_ns + 50'000'000ULL, now_ns - 10'000'000'000ULL, 12345ULL, ~0ULL}) {
+        EXPECT_TRUE(mac::resolve_event_timestamp(ts, now_ticks, 125, 3).source == mac::TimestampSource::Arrival);
+    }
+}
+
+TEST(MacOS, PlausibleTimestampsAreUsed) {
+    const std::uint64_t now_ticks = 240'000'000'000ULL;
+    const std::uint64_t now_ns = mac::ticks_to_ns(now_ticks, 125, 3);
+    const auto ns = mac::resolve_event_timestamp(now_ns - 3'000'000, now_ticks, 125, 3);
+    EXPECT_TRUE(ns.source == mac::TimestampSource::EventNanoseconds);
+    EXPECT_EQ(ns.time, Timestamp(static_cast<std::int64_t>(now_ns - 3'000'000)));
+    const auto ticks = mac::resolve_event_timestamp(now_ticks - 72'000, now_ticks, 125, 3);  // 3 ms ago
+    EXPECT_TRUE(ticks.source == mac::TimestampSource::EventTicks);
+    EXPECT_EQ(ticks.time, Timestamp(static_cast<std::int64_t>(now_ns - 3'000'000)));
+    // Intel: ticks are nanoseconds.
+    EXPECT_TRUE(mac::resolve_event_timestamp(9'000'000'000ULL, 9'001'000'000ULL, 1, 1).source ==
+                mac::TimestampSource::EventNanoseconds);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Windows
 // ---------------------------------------------------------------------------------------------

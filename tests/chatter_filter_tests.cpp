@@ -868,6 +868,199 @@ TEST(Control, OutOfRangeKeyCodesPassAndKeepOrder) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Immediate release mode (macOS, Windows): no event is ever created or delayed
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+FilterSettings immediate_settings(std::chrono::milliseconds threshold = 30ms) {
+    FilterSettings s;
+    s.threshold = threshold;
+    s.release_mode = ReleaseMode::Immediate;
+    s.filter_modifiers = false;
+    return s;
+}
+}  // namespace
+
+TEST(Immediate, ReleasesPassWithoutDelay) {
+    SimulatedKeyboard kb(immediate_settings());
+    EXPECT_EQ(kb.press(kA, 0), Decision::Accept);
+    EXPECT_EQ(kb.release(kA, 80), Decision::Accept);
+    EXPECT_EQ(kb.transcript(), "a+ a-");
+    EXPECT_EQ(kb.delivered()[1].delivered_at, at_ms(80));
+    EXPECT_FALSE(kb.filter().has_pending());
+    EXPECT_FALSE(kb.scheduler().wakeup.has_value());
+}
+
+TEST(Immediate, BounceAfterReleaseIsDroppedWithItsRelease) {
+    for (const double gap : {0.0, 5.0, 10.0, 20.0, 29.0}) {
+        SimulatedKeyboard kb(immediate_settings());
+        kb.press(kA, 0);
+        kb.release(kA, 90);
+        EXPECT_EQ(kb.press(kA, 90 + gap), Decision::Reject);
+        EXPECT_EQ(kb.release(kA, 92 + gap), Decision::Reject);
+        EXPECT_EQ(kb.transcript(), "a+ a-");
+        EXPECT_TRUE(kb.injected().empty());
+    }
+}
+
+TEST(Immediate, BounceOnPressGivesOneKeystroke) {
+    SimulatedKeyboard kb(immediate_settings());
+    kb.press(kA, 0);
+    kb.release(kA, 2);
+    kb.press(kA, 4);
+    kb.release(kA, 5);
+    kb.press(kA, 7);
+    kb.release(kA, 120);
+    EXPECT_EQ(kb.transcript(), "a+ a-");
+    EXPECT_TRUE(kb.injected().empty());
+}
+
+TEST(Immediate, LegitimateFastDoubleTap) {
+    SimulatedKeyboard kb(immediate_settings());
+    kb.press(kA, 0);
+    kb.release(kA, 40);
+    kb.press(kA, 75);  // 35 ms after the release
+    kb.release(kA, 110);
+    EXPECT_EQ(kb.transcript(), "a+ a- a+ a-");
+}
+
+TEST(Immediate, RepeatsAndOrdering) {
+    SimulatedKeyboard kb(immediate_settings());
+    kb.press(kA, 0);
+    kb.repeat(kA, 500);
+    kb.repeat(kA, 533);
+    kb.press(kB, 540);
+    kb.release(kA, 550);
+    kb.release(kB, 600);
+    EXPECT_EQ(kb.transcript(), "a+ a* a* b+ a- b-");
+}
+
+TEST(Immediate, ModifiersPassUntouched) {
+    SimulatedKeyboard kb(immediate_settings());
+    kb.press(kShift, 0, KeyRole::Modifier);
+    kb.release(kShift, 100, KeyRole::Modifier);
+    EXPECT_EQ(kb.press(kShift, 103, KeyRole::Modifier), Decision::Accept);  // bounce: passes, held state stays right
+    kb.press(kA, 150);
+    kb.release(kA, 200);
+    kb.release(kShift, 300, KeyRole::Modifier);
+    EXPECT_EQ(kb.transcript(), "S+ S- S+ a+ a- S-");
+}
+
+TEST(Immediate, ConstantTimestampsTripTheBreaker) {
+    SimulatedKeyboard kb(immediate_settings());
+    double clock = 0;
+    for (int i = 0; i < 8; ++i) {
+        kb.send_at_clock(ev(kA, KeyAction::Down, 0), clock);
+        kb.send_at_clock(ev(kA, KeyAction::Up, 0), clock + 60);
+        clock += 150;
+    }
+    EXPECT_TRUE(kb.engine().tripped());
+    EXPECT_GE(count(kb, kA, KeyAction::Down), 5);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Safety circuit breaker
+// ---------------------------------------------------------------------------------------------
+
+TEST(Breaker, ConstantTimestampsTripTheBreakerAndTypingRecovers) {
+    // A platform that reports the same timestamp for every event makes every re-press look like a
+    // 0 ms bounce. Without the breaker each key would work exactly once.
+    SimulatedKeyboard kb;
+    double clock = 0;
+    for (int i = 0; i < 8; ++i) {
+        kb.send_at_clock(ev(kA, KeyAction::Down, 0), clock + 0);
+        kb.send_at_clock(ev(kA, KeyAction::Up, 0), clock + 60);
+        clock += 150;
+    }
+    kb.settle();
+    EXPECT_TRUE(kb.engine().tripped());
+    EXPECT_GE(count(kb, kA, KeyAction::Down), 5);  // at most kRunawayRejections presses were lost
+    // After tripping, everything passes untouched.
+    EXPECT_EQ(kb.send_at_clock(ev(kB, KeyAction::Down, 0), clock), Decision::Accept);
+    EXPECT_EQ(kb.send_at_clock(ev(kB, KeyAction::Up, 0), clock + 1), Decision::Accept);
+}
+
+TEST(Breaker, ManyKeysWorkingOnlyOnceTripsTheBreaker) {
+    // Constant timestamps across the whole keyboard: the first key to lose four presses trips it.
+    SimulatedKeyboard kb;
+    double clock = 0;
+    for (int round = 0; round < 6; ++round) {
+        for (KeyCode k = 'a'; k < 'a' + 10; ++k) {
+            kb.send_at_clock(ev(k, KeyAction::Down, 0), clock);
+            kb.send_at_clock(ev(k, KeyAction::Up, 0), clock + 40);
+            clock += 100;
+        }
+    }
+    EXPECT_TRUE(kb.engine().tripped());
+}
+
+TEST(Breaker, FlickeringHoldDoesNotTrip) {
+    // A worn switch losing contact every 100 ms while held: many merged bounces, no lost keystroke.
+    SimulatedKeyboard kb;
+    kb.press(kA, 0);
+    for (int i = 1; i <= 20; ++i) {
+        kb.release(kA, i * 100.0);
+        kb.press(kA, i * 100.0 + 3);
+    }
+    kb.release(kA, 2200);
+    kb.settle();
+    EXPECT_FALSE(kb.engine().tripped());
+    EXPECT_EQ(kb.transcript(), "a+ a-");
+}
+
+TEST(Breaker, BounceBurstsAfterOtherKeysDoNotTrip) {
+    // Every keystroke of 'a' bounces right after another key forced its release out, many times.
+    SimulatedKeyboard kb;
+    double t = 0;
+    for (int i = 0; i < 30; ++i) {
+        kb.press(kA, t);
+        kb.release(kA, t + 50);
+        kb.press(kB, t + 51);
+        kb.press(kA, t + 53);  // bounce: dropped
+        kb.release(kA, t + 54);
+        kb.press(kA, t + 56);  // bounce: dropped
+        kb.release(kA, t + 57);
+        kb.release(kB, t + 90);
+        t += 200;
+    }
+    kb.settle();
+    EXPECT_FALSE(kb.engine().tripped());
+    EXPECT_EQ(count(kb, kA, KeyAction::Down), 30);
+}
+
+TEST(Breaker, ReloadingSettingsRearms) {
+    SimulatedKeyboard kb;
+    double clock = 0;
+    for (int i = 0; i < 8; ++i) {
+        kb.send_at_clock(ev(kA, KeyAction::Down, 0), clock);
+        kb.send_at_clock(ev(kA, KeyAction::Up, 0), clock + 60);
+        clock += 150;
+    }
+    ASSERT_TRUE(kb.engine().tripped());
+    kb.engine().update_settings(FilterSettings{25ms, true});
+    EXPECT_FALSE(kb.engine().tripped());
+    EXPECT_TRUE(kb.engine().trip_reason() == nullptr);
+}
+
+TEST(Breaker, ChatterGapHistogram) {
+    SimulatedKeyboard kb;
+    kb.press(kA, 0);
+    kb.release(kA, 100);
+    kb.press(kA, 102);  // 2 ms
+    kb.release(kA, 200);
+    kb.press(kA, 207);  // 7 ms
+    kb.release(kA, 300);
+    kb.press(kA, 325);  // 25 ms
+    kb.release(kA, 400);
+    kb.settle();
+    const auto& h = kb.filter().stats().chatter_gap_histogram;
+    EXPECT_EQ(h[0], 1u);
+    EXPECT_EQ(h[1], 1u);
+    EXPECT_EQ(h[2], 0u);
+    EXPECT_EQ(h[3], 1u);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Randomised property tests
 // ---------------------------------------------------------------------------------------------
 
@@ -886,7 +1079,7 @@ Generated generate(std::mt19937& rng, int keys, int presses_per_key, double min_
     std::uniform_real_distribution<double> hold(40, 250);
     std::uniform_real_distribution<double> gap(min_gap, min_gap + 400);
     std::uniform_real_distribution<double> bounce(0.2, 8);
-    std::uniform_int_distribution<int> bounces(0, 3);
+    std::uniform_int_distribution<int> bounces(0, 6);
     std::uniform_real_distribution<double> start(0, 300);
     std::bernoulli_distribution chatter_here(0.4);
 
@@ -986,6 +1179,26 @@ TEST(Property, ChatterIsRemovedWithoutLosingKeystrokes) {
         }
         kb.settle();
         check_invariants(kb, g);
+        EXPECT_FALSE(kb.engine().tripped());
+        if (kcf_test::failure_count() != 0) {
+            std::fprintf(stderr, "    failing seed: %u\n", seed);
+            return;
+        }
+    }
+}
+
+TEST(Property, ImmediateModeChatterIsRemovedWithoutLosingKeystrokes) {
+    for (unsigned seed = 1; seed <= 200; ++seed) {
+        std::mt19937 rng(seed);
+        const Generated g = generate(rng, 6, 25, 31, true);
+        SimulatedKeyboard kb(immediate_settings());
+        for (const KeyEvent& e : g.events) {
+            kb.send(e);
+        }
+        kb.settle();
+        check_invariants(kb, g);
+        EXPECT_FALSE(kb.engine().tripped());
+        EXPECT_TRUE(kb.injected().empty());
         if (kcf_test::failure_count() != 0) {
             std::fprintf(stderr, "    failing seed: %u\n", seed);
             return;
@@ -1006,6 +1219,29 @@ TEST(Property, CleanInputPassesThroughUnchanged) {
         ASSERT_EQ(kb.delivered().size(), g.events.size());
         for (std::size_t i = 0; i < g.events.size(); ++i) {
             EXPECT_TRUE(kb.delivered()[i].event == g.events[i]);
+        }
+        EXPECT_EQ(kb.filter().stats().chatter_suppressed, 0u);
+        if (kcf_test::failure_count() != 0) {
+            std::fprintf(stderr, "    failing seed: %u\n", seed);
+            return;
+        }
+    }
+}
+
+TEST(Property, ImmediateModeCleanInputPassesWithoutDelay) {
+    for (unsigned seed = 1; seed <= 200; ++seed) {
+        std::mt19937 rng(seed);
+        const Generated g = generate(rng, 8, 25, 31, false);
+        SimulatedKeyboard kb(immediate_settings());
+        for (const KeyEvent& e : g.events) {
+            kb.send(e);
+        }
+        kb.settle();
+        // Identical events, identical order: the filter is transparent to non-chattering input.
+        ASSERT_EQ(kb.delivered().size(), g.events.size());
+        for (std::size_t i = 0; i < g.events.size(); ++i) {
+            EXPECT_TRUE(kb.delivered()[i].event == g.events[i]);
+            EXPECT_EQ(kb.delivered()[i].delivered_at, g.events[i].timestamp);
         }
         EXPECT_EQ(kb.filter().stats().chatter_suppressed, 0u);
         if (kcf_test::failure_count() != 0) {

@@ -76,6 +76,18 @@ public:
         return decision;
     }
 
+    // Delivers `event` when the platform clock reads `clock_ms`, whatever timestamp the event
+    // carries (for simulating platforms that report bogus timestamps).
+    Decision send_at_clock(const KeyEvent& event, double clock_ms) {
+        advance_to(at_ms(clock_ms));
+        const Decision decision = engine_.on_key_event(event);
+        decisions_.push_back(decision);
+        if (decision == Decision::Accept) {
+            delivered_.push_back({event, clock_.now(), false});
+        }
+        return decision;
+    }
+
     Decision press(KeyCode code, double ms, KeyRole role = KeyRole::Regular) {
         return send(make(code, KeyAction::Down, ms, role));
     }

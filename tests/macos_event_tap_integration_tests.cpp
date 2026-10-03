@@ -119,8 +119,12 @@ TEST(MacOSIntegration, ChatterIsRemovedBetweenTheTapAndApplications) {
     macos::MachClock clock;
     macos::MacKeyboardOutput output;
     Scheduler scheduler(clock);
-    FilterEngine engine(FilterSettings{}, output, scheduler, clock);
+    FilterSettings settings;  // the production macOS policy
+    settings.release_mode = ReleaseMode::Immediate;
+    settings.filter_modifiers = false;
+    FilterEngine engine(settings, output, scheduler, clock);
     macos::MacKeyboardInterceptor interceptor(output, clock);
+    interceptor.set_pass_own_events(false);  // this test posts the "hardware" events itself
     ASSERT_TRUE(interceptor.start(engine).ok());
     Recorder recorder;
     ASSERT_TRUE(recorder.ok());
@@ -152,6 +156,7 @@ TEST(MacOSIntegration, ChatterIsRemovedBetweenTheTapAndApplications) {
     pump(150, scheduler, engine);
     EXPECT_EQ(recorder.take(), (std::vector<Record>{{kF18, true}, {kF18, false}, {kF18, true}, {kF18, false}}));
 
+    EXPECT_FALSE(engine.tripped());
     interceptor.stop();
     CFRelease(source);
 }

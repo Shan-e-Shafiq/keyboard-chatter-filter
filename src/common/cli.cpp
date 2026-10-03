@@ -96,6 +96,12 @@ CliParseResult parse_command_line(std::span<const std::string_view> args) {
                 return result;
             }
             options.log_level = level;
+        } else if (arg == "--dry-run") {
+            if (options.command != Command::Run) {
+                result.error = "--dry-run is only accepted by 'run'";
+                return result;
+            }
+            options.dry_run = true;
         } else if (arg == "--purge") {
             if (options.command != Command::Uninstall) {
                 result.error = "--purge is only accepted by 'uninstall'";
@@ -141,8 +147,9 @@ Service commands:
 
 Other commands:
   config [--config PATH]   Show the configuration file in use, effective settings and problems
-  run [--config PATH] [--log-level LEVEL]
-                           Run the filter in the foreground (the service runs this)
+  run [--config PATH] [--log-level LEVEL] [--dry-run]
+                           Run the filter in the foreground (the service runs this).
+                           --dry-run only observes and counts what it would remove
   version                  Print the version
   help                     Show this help
 

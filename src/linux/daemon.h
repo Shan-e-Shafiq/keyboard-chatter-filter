@@ -12,6 +12,7 @@ namespace kcf::linux_input {
 struct DaemonOptions {
     std::filesystem::path config_path;
     std::optional<LogLevel> log_level_override;
+    bool dry_run = false;  // observe and count only: keyboards are not grabbed
     // Test hook: only consider input devices with exactly this name (never set by the CLI).
     std::optional<std::string> only_device_name;
     // Test hook: where to look for evdev nodes.

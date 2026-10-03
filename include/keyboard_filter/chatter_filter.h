@@ -32,12 +32,37 @@ protected:
     ~IEventSink() = default;
 };
 
+enum class ReleaseMode : std::uint8_t {
+    // Key-ups are held back for the chatter window and cancelled if the key bounces back down, so
+    // holds survive a bouncing switch. Requires an output that can deliver events later (Linux,
+    // where the filter owns the virtual keyboard applications read from).
+    Deferred,
+    // Key-ups pass immediately; a re-press inside the window is dropped together with its key-up.
+    // The filter never has to create an event, so it can never leave a key stuck. Used where
+    // events would have to be re-injected into the OS input stream (macOS, Windows).
+    Immediate,
+};
+
 struct FilterSettings {
     // A key that is released and pressed again within this window is treated as switch chatter.
     std::chrono::milliseconds threshold{30};
     bool enabled = true;
+    // Platform policy (not user configuration).
+    ReleaseMode release_mode = ReleaseMode::Deferred;
+    // When false, modifier keys pass untouched. Chatter on a modifier produces no extra characters,
+    // and in Immediate mode filtering it could release a held modifier early.
+    bool filter_modifiers = true;
 
     friend bool operator==(const FilterSettings&, const FilterSettings&) = default;
+};
+
+// Why the most recent event was rejected.
+enum class RejectReason : std::uint8_t {
+    None,
+    Chatter,       // a re-press shortly after a release of the same key; merged into the held key
+    ChatterAfterRelease,  // the same, but the release had already been delivered: the press is dropped
+    Duplicate,     // a second press/release without the opposite transition in between
+    OrphanRepeat,  // auto-repeat of a key whose press was removed as chatter
 };
 
 struct FilterStats {
@@ -47,6 +72,8 @@ struct FilterStats {
     std::uint64_t repeats_suppressed = 0;    // auto-repeat for a key that is logically released
     std::uint64_t releases_deferred = 0;     // key-ups held back for the chatter window
     std::uint64_t releases_emitted = 0;      // held-back key-ups later delivered
+    // Release-to-press gaps of suppressed chatter, for threshold tuning: <5, 5-10, 10-20, >=20 ms.
+    std::uint64_t chatter_gap_histogram[4] = {0, 0, 0, 0};
 };
 
 // Per-key switch-chatter filter.
@@ -115,6 +142,7 @@ public:
     [[nodiscard]] Duration threshold_for(KeyCode code) const noexcept;
 
     [[nodiscard]] const FilterStats& stats() const noexcept { return stats_; }
+    [[nodiscard]] RejectReason last_reject_reason() const noexcept { return last_reject_; }
 
     // Whether applications currently see `code` as held down (exposed for tests and diagnostics).
     [[nodiscard]] bool is_logically_down(KeyCode code) const noexcept;
@@ -139,6 +167,8 @@ private:
     Decision on_up(KeyState& key, const KeyEvent& event, Duration window);
     Decision on_repeat(KeyState& key);
 
+    Decision reject(RejectReason reason) noexcept;
+    void record_chatter_gap(Duration gap) noexcept;
     void emit_pending(IEventSink& sink);
     void cancel_pending() noexcept;
     [[nodiscard]] Duration window_for(const KeyState& key) const noexcept;
@@ -150,6 +180,7 @@ private:
     // delivers it first, so releases cannot pile up.
     std::optional<KeyCode> pending_;
     FilterStats stats_{};
+    RejectReason last_reject_ = RejectReason::None;
 };
 
 // True if `later` happened less than `window` after `earlier`. Timestamps that step backwards by

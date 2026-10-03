@@ -6,8 +6,13 @@ All notable changes are documented here. The project follows [Semantic Versionin
 
 First release.
 
-* Per-key chatter filter: immediate key-down, held-back key-up with chatter cancellation,
-  order-preserving delivery, duplicate-transition and orphaned-repeat removal.
+* Per-key chatter filter: immediate key-down; on Linux held-back key-ups with chatter cancellation
+  and order-preserving delivery; on macOS/Windows immediate key-ups with no event ever created;
+  duplicate-transition and orphaned-repeat removal.
+* Safety circuit breaker: filtering switches itself off if it keeps dropping a key's deliberate
+  presses. Event timestamps are only trusted when plausible. `run --dry-run` observes without
+  dropping anything. (A pre-release macOS build that re-posted held-back key-ups made keys unusable
+  on a real machine; these changes make that class of failure impossible or self-correcting.)
 * macOS: HID-level Quartz event tap, LaunchAgent with automatic restart, Accessibility permission
   handling.
 * Windows: low-level keyboard hook in a per-session agent supervised by an automatic-start Windows

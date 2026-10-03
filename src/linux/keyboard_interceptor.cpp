@@ -56,7 +56,7 @@ void track_modifier(ModifierState& m, unsigned code, bool down) {
 
 }  // namespace
 
-EvdevKeyboard::EvdevKeyboard(EvdevDevice device, UinputKeyboardOutput& output, DeviceId id,
+EvdevKeyboard::EvdevKeyboard(EvdevDevice device, UinputKeyboardOutput* output, DeviceId id,
                              std::function<void()> before_key_event)
     : device_(std::move(device)), output_(output), id_(id), before_key_event_(std::move(before_key_event)) {}
 
@@ -66,6 +66,9 @@ EvdevKeyboard::~EvdevKeyboard() {
 
 InterceptorStartResult EvdevKeyboard::start(IKeyEventHandler& handler) {
     handler_ = &handler;
+    if (output_ == nullptr) {
+        return {};  // dry run: observe without grabbing
+    }
     std::string error;
     if (!try_grab(error)) {
         handler_ = nullptr;
@@ -119,6 +122,15 @@ EvdevKeyboard::ReadStatus EvdevKeyboard::on_readable() {
 }
 
 void EvdevKeyboard::handle(const input_event& ev) {
+    if (output_ == nullptr) {
+        // Dry run: the desktop receives the events directly; we only classify and count them.
+        if (ev.type == EV_KEY) {
+            handle_key(ev);
+        } else if (ev.type == EV_SYN && ev.code == SYN_DROPPED && handler_ != nullptr) {
+            handler_->on_events_lost();
+        }
+        return;
+    }
     if (!device_.grabbed()) {
         // Not ours yet: the system receives these events directly from the device.
         if (waiting_for_release_ && handler_ != nullptr && ev.type == EV_SYN && ev.code == SYN_REPORT) {
@@ -145,25 +157,25 @@ void EvdevKeyboard::handle(const input_event& ev) {
     switch (ev.type) {
         case EV_SYN:
             if (ev.code == SYN_REPORT) {
-                output_.end_frame();
+                output_->end_frame();
                 pending_scan_.reset();
             } else if (ev.code == SYN_DROPPED) {
                 dropping_ = true;
-                output_.discard_frame();
+                output_->discard_frame();
                 pending_scan_.reset();
                 log::debug("input buffer overflow on ", device_.path().string(), "; resynchronising");
             }
             return;
         case EV_MSC:
-            output_.begin_frame();
+            output_->begin_frame();
             if (ev.code == MSC_SCAN) {
                 pending_scan_ = ev;  // belongs to the key event that follows
             } else {
-                output_.forward(ev);
+                output_->forward(ev);
             }
             return;
         case EV_KEY:
-            output_.begin_frame();
+            output_->begin_frame();
             handle_key(ev);
             return;
         case EV_LED:
@@ -172,8 +184,8 @@ void EvdevKeyboard::handle(const input_event& ev) {
         case EV_FF:
             return;  // state echoes and output channels, not input
         default:
-            output_.begin_frame();
-            output_.forward(ev);
+            output_->begin_frame();
+            output_->forward(ev);
             return;
     }
 }
@@ -197,17 +209,17 @@ void EvdevKeyboard::handle_key(const input_event& ev) {
     if (before_key_event_) {
         before_key_event_();  // keeps the order of events across several keyboards
     }
-    if (handler_->on_key_event(key) == Decision::Accept) {
+    if (handler_->on_key_event(key) == Decision::Accept && output_ != nullptr) {
         if (pending_scan_) {
-            output_.forward(*pending_scan_);
+            output_->forward(*pending_scan_);
         }
-        output_.forward(ev);
+        output_->forward(ev);
     }
     pending_scan_.reset();
 }
 
 void EvdevKeyboard::resync() {
-    if (handler_ == nullptr) {
+    if (handler_ == nullptr || output_ == nullptr) {
         return;
     }
     const auto pressed = device_.pressed_keys();
@@ -216,7 +228,7 @@ void EvdevKeyboard::resync() {
         return;
     }
     const DeviceCapabilities& caps = device_.capabilities();
-    output_.begin_frame();
+    output_->begin_frame();
     timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
     const Timestamp at(static_cast<std::int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec);
@@ -225,12 +237,15 @@ void EvdevKeyboard::resync() {
             handler_->on_key_state(static_cast<KeyCode>(k), pressed->test(k), at);
         }
     }
-    output_.end_frame();
+    output_->end_frame();
 }
 
 void EvdevKeyboard::on_virtual_led_feedback() {
+    if (output_ == nullptr) {
+        return;
+    }
     input_event buffer[16];
-    UinputDevice& virtual_device = output_.device();
+    UinputDevice& virtual_device = output_->device();
     while (true) {
         const ssize_t n = ::read(virtual_device.fd(), buffer, sizeof buffer);
         if (n <= 0) {
