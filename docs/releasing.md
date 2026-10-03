@@ -11,8 +11,8 @@ for public repositories. Nothing is built on a developer machine.
    attaches the files to it):
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v1.0.0
+   git push origin v1.0.0
    ```
 
 4. `.github/workflows/release.yml` then:

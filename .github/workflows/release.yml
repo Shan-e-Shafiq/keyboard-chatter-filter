@@ -3,7 +3,7 @@ name: Release
 # Builds signed-or-ad-hoc release binaries for every platform, tests them, and publishes them with
 # SHA-256 checksums and build-provenance attestations to a GitHub Release.
 #
-# Trigger: push a tag matching the version in CMakeLists.txt, e.g. `git tag v0.1.0 && git push origin v0.1.0`.
+# Trigger: push a tag matching the version in CMakeLists.txt, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
 # Manual runs (workflow_dispatch) build and upload workflow artifacts but do not publish a release.
 
 on:
