@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Ninja
+        run: command -v ninja || brew install ninja
+      - name: Configure
+        run: cmake --preset ci -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+      - name: Build
+        run: cmake --build --preset ci
+      - name: Test
+        run: ctest --preset ci
+      - name: Smoke test
+        run: |
+          ./build/ci/keyboard-chatter-filter version
+          ./build/ci/keyboard-chatter-filter config
+
+  linux-static:
+    name: Linux ${{ matrix.arch }} (static, musl)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      # Built in a plain `docker run` (not a job container) because JavaScript actions cannot run
+      # inside Alpine containers on arm64 runners.
+      - name: Build and test in Alpine
+        run: docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh scripts/ci/build-linux-static.sh ${{ matrix.arch }}
+
+  linux-glibc:
+    name: Linux (${{ matrix.compiler }}, glibc) + kernel integration tests
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: |
+          if [ "${{ matrix.compiler }}" = clang ]; then export CXX=clang++; else export CXX=g++; fi
+          cmake --preset ci
+      - name: Build
+        run: cmake --build --preset ci
+      - name: Unit tests
+        run: ctest --preset ci
+      - name: Kernel integration tests (evdev + uinput)
+        run: |
+          sudo modprobe uinput
+          sudo ./build/ci/tests/linux_uinput_integration_tests
+
+  sanitizers:
+    name: AddressSanitizer + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: CXX=clang++ cmake --preset asan
+      - name: Build
+        run: cmake --build --preset asan
+      - name: Test
+        run: ctest --preset asan
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2022
+          - arch: ARM64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: cmake --preset windows-release -A ${{ matrix.arch }}
+      - name: Build
+        run: cmake --build --preset windows-release
+      - name: Test
+        run: ctest --preset windows-release
+      - name: Smoke test
+        run: |
+          ./build/windows-release/Release/keyboard-chatter-filter.exe version
+          ./build/windows-release/Release/keyboard-chatter-filter.exe config
+
+  scripts:
+    name: Installer scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck install.sh scripts/uninstall.sh scripts/ci/*.sh
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          foreach ($file in 'install.ps1', 'scripts/uninstall.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error "${file}: $_" }; exit 1 }
+          }
