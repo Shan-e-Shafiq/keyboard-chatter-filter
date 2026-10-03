@@ -1,0 +1,195 @@
+name: Release
+
+# Builds signed-or-ad-hoc release binaries for every platform, tests them, and publishes them with
+# SHA-256 checksums and build-provenance attestations to a GitHub Release.
+#
+# Trigger: push a tag matching the version in CMakeLists.txt, e.g. `git tag v0.1.0 && git push origin v0.1.0`.
+# Manual runs (workflow_dispatch) build and upload workflow artifacts but do not publish a release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Check version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        name: Compare tag and project version
+        run: |
+          project=$(sed -nE 's/^ *VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt | head -n1)
+          echo "version=$project" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "${GITHUB_REF_NAME}" != "v$project" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match project version v$project in CMakeLists.txt"
+            exit 1
+          fi
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      HAS_SIGNING_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Ninja
+        run: command -v ninja || brew install ninja
+      - name: Build and test
+        run: |
+          cmake --preset ci -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+          cmake --build --preset ci
+          ctest --preset ci
+          strip -x build/ci/keyboard-chatter-filter
+      - name: Sign with Developer ID and notarize
+        if: env.HAS_SIGNING_IDENTITY == 'true'
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: scripts/ci/macos-sign.sh developer-id build/ci/keyboard-chatter-filter
+      - name: Ad-hoc sign
+        if: env.HAS_SIGNING_IDENTITY != 'true'
+        run: scripts/ci/macos-sign.sh ad-hoc build/ci/keyboard-chatter-filter
+      - name: Package
+        run: |
+          mkdir -p dist staging
+          cp build/ci/keyboard-chatter-filter LICENSE README.md staging/
+          tar -C staging -czf dist/keyboard-chatter-filter-macos-${{ matrix.arch }}.tar.gz keyboard-chatter-filter LICENSE README.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build, test and package (static, musl)
+        run: docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh scripts/ci/build-linux-static.sh ${{ matrix.arch }}
+      - name: Kernel integration test of the release binary's adapter
+        if: matrix.arch == 'x86_64'
+        run: |
+          sudo modprobe uinput
+          docker run --rm --privileged -v /dev:/dev -v "$PWD":/src -w /src alpine:3.20 sh -c \
+            'apk add --no-cache build-base cmake ninja linux-headers >/dev/null &&
+             cmake -S . -B /tmp/b -G Ninja -DCMAKE_BUILD_TYPE=Release -DKCF_STATIC_LINK=ON >/dev/null &&
+             cmake --build /tmp/b --target linux_uinput_integration_tests >/dev/null &&
+             /tmp/b/tests/linux_uinput_integration_tests'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            cmake_arch: x64
+            runner: windows-2022
+          - arch: arm64
+            cmake_arch: ARM64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and test
+        run: |
+          cmake --preset windows-release -A ${{ matrix.cmake_arch }}
+          cmake --build --preset windows-release
+          ctest --preset windows-release
+      - name: Authenticode sign
+        if: env.HAS_SIGNING_CERT == 'true'
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          & $signtool.FullName sign /f $pfx /p $env:PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 build/windows-release/Release/keyboard-chatter-filter.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item $pfx
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, staging | Out-Null
+          Copy-Item build/windows-release/Release/keyboard-chatter-filter.exe, LICENSE, README.md staging/
+          Compress-Archive -Path staging/* -DestinationPath dist/keyboard-chatter-filter-windows-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [version, macos, linux, windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write      # create the release
+      id-token: write      # build provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Add installers pinned to this repository
+        run: |
+          for script in install.sh install.ps1 scripts/uninstall.sh scripts/uninstall.ps1; do
+            sed "s#Shan-e-Shafiq/keyboard-chatter-filter#${GITHUB_REPOSITORY}#g" "$script" > "dist/$(basename "$script")"
+          done
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "keyboard-chatter-filter ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
