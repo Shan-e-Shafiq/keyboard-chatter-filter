@@ -24,8 +24,8 @@ for public repositories. Nothing is built on a developer machine.
      | `keyboard-chatter-filter-macos-x86_64.tar.gz` | `macos-15-intel` | |
      | `keyboard-chatter-filter-linux-x86_64.tar.gz` | `ubuntu-24.04` | static musl build in Alpine; also runs the kernel integration tests |
      | `keyboard-chatter-filter-linux-arm64.tar.gz` | `ubuntu-24.04-arm` | static musl build in Alpine |
-     | `keyboard-chatter-filter-windows-x86_64.zip` | `windows-2022` | MSVC, static CRT |
-     | `keyboard-chatter-filter-windows-arm64.zip` | `windows-11-arm` | MSVC, static CRT |
+     | `keyboard-chatter-filter-windows-x86_64.zip` | `windows-2022` | MSVC (newest Visual Studio on the image), static CRT |
+     | `keyboard-chatter-filter-windows-arm64.zip` | `windows-11-arm` | MSVC (newest Visual Studio on the image), static CRT |
 
    * signs the macOS and Windows binaries when signing secrets are configured (see below);
    * attaches `install.sh`, `install.ps1`, `uninstall.sh` and `uninstall.ps1`, pinned to the
@@ -34,6 +34,10 @@ for public repositories. Nothing is built on a developer machine.
    * creates a [build provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
      for every asset (`actions/attest-build-provenance`);
    * publishes the GitHub Release with generated notes.
+
+All actions used run on Node 24 (GitHub removed Node 20 from hosted runners in September 2026).
+`macos-15-intel` is the Intel runner; GitHub has announced the end of x86_64 macOS runners for
+around August 2027, after which the Intel build should be cross-compiled on Apple silicon.
 
 Running the workflow manually (`workflow_dispatch`) builds and uploads the artefacts to the run
 without publishing a release, which is useful to test the pipeline.

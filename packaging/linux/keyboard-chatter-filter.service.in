@@ -11,6 +11,9 @@ Description=Keyboard chatter filter (removes duplicate keystrokes from worn keyb
 Documentation={{PROJECT_URL}}
 StartLimitIntervalSec=60
 StartLimitBurst=5
+# /dev/uinput must exist before DeviceAllow= is resolved (a missing path is silently skipped).
+Wants=modprobe@uinput.service
+After=modprobe@uinput.service
 
 [Service]
 Type=notify

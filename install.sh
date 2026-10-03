@@ -10,7 +10,8 @@
 #   KCF_REPO               GitHub "owner/repo" to install from (default: Shan-e-Shafiq/keyboard-chatter-filter)
 #   KCF_VERSION            release tag, e.g. v0.1.0 (default: the latest release)
 #   KCF_INSTALL_DIR        binary location (default: ~/.local/bin on macOS, /usr/local/bin on Linux)
-#   KCF_VERIFY_ATTESTATION 1 = also verify the GitHub build-provenance attestation (needs the gh CLI)
+#   KCF_VERIFY_ATTESTATION 1 = also verify the GitHub build-provenance attestation (needs the gh CLI,
+#                          logged in: gh attestation verify requires authentication)
 #   KCF_ARCHIVE_DIR        install from a directory that already holds the release archive and
 #                          SHA256SUMS (offline installs); the checksum is still verified
 #

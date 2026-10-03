@@ -106,7 +106,7 @@ registers and starts the service. To review the script first, run
 | `KCF_REPO=owner/repo` | install from a fork (default `Shan-e-Shafiq/keyboard-chatter-filter`) |
 | `KCF_VERSION=v0.1.0` | a specific release instead of the latest |
 | `KCF_INSTALL_DIR=/path` | binary location (macOS/Linux) |
-| `KCF_VERIFY_ATTESTATION=1` | also verify the GitHub build-provenance attestation (needs the `gh` CLI) |
+| `KCF_VERIFY_ATTESTATION=1` | also verify the GitHub build-provenance attestation (needs the `gh` CLI, logged in with `gh auth login`) |
 | `KCF_ARCHIVE_DIR=/path` | offline install from a directory containing the release archive and `SHA256SUMS` |
 | `KCF_REQUIRE_SIGNATURE=1` | Windows: refuse binaries without a valid Authenticode signature |
 
@@ -126,6 +126,8 @@ proving that the files were built by this repository's release workflow:
 sha256sum --check --ignore-missing SHA256SUMS        # macOS: shasum -a 256 --check --ignore-missing SHA256SUMS
 gh attestation verify keyboard-chatter-filter-linux-x86_64.tar.gz --repo Shan-e-Shafiq/keyboard-chatter-filter
 ```
+
+(`gh attestation verify` needs a logged-in `gh`, even for public repositories.)
 
 ## Automatic startup
 

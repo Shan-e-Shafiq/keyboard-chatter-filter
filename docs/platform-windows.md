@@ -15,7 +15,7 @@ flowchart LR
   `keyboard-chatter-filter` with:
   * automatic start at boot;
   * failure actions: restart after 5 s, 5 s, then 30 s (reset daily), also when the service stops
-    with an error code;
+    with an error code (Windows documents that this last flag takes effect after the next restart);
   * a description stating that keystrokes are processed in memory only.
 * A service runs in **Session 0**, which has no access to the interactive desktop; a low-level
   keyboard hook installed there would never see the user's typing. The service therefore launches

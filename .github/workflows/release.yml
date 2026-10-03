@@ -21,7 +21,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: version
         name: Compare tag and project version
         run: |
@@ -46,7 +46,7 @@ jobs:
     env:
       HAS_SIGNING_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Ninja
         run: command -v ninja || brew install ninja
       - name: Build and test
@@ -73,7 +73,7 @@ jobs:
           mkdir -p dist staging
           cp build/ci/keyboard-chatter-filter LICENSE README.md staging/
           tar -C staging -czf dist/keyboard-chatter-filter-macos-${{ matrix.arch }}.tar.gz keyboard-chatter-filter LICENSE README.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
           path: dist/*
@@ -91,7 +91,7 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build, test and package (static, musl)
         run: docker run --rm -v "$PWD":/src -w /src alpine:3.20 sh scripts/ci/build-linux-static.sh ${{ matrix.arch }}
       - name: Kernel integration test of the release binary's adapter
@@ -103,7 +103,7 @@ jobs:
              cmake -S . -B /tmp/b -G Ninja -DCMAKE_BUILD_TYPE=Release -DKCF_STATIC_LINK=ON >/dev/null &&
              cmake --build /tmp/b --target linux_uinput_integration_tests >/dev/null &&
              /tmp/b/tests/linux_uinput_integration_tests'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.arch }}
           path: dist/*
@@ -125,7 +125,7 @@ jobs:
     env:
       HAS_SIGNING_CERT: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build and test
         run: |
           cmake --preset windows-release -A ${{ matrix.cmake_arch }}
@@ -150,7 +150,7 @@ jobs:
           New-Item -ItemType Directory -Force dist, staging | Out-Null
           Copy-Item build/windows-release/Release/keyboard-chatter-filter.exe, LICENSE, README.md staging/
           Compress-Archive -Path staging/* -DestinationPath dist/keyboard-chatter-filter-windows-${{ matrix.arch }}.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-${{ matrix.arch }}
           path: dist/*
@@ -166,8 +166,8 @@ jobs:
       id-token: write      # build provenance attestation
       attestations: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -182,7 +182,7 @@ jobs:
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
       - name: Create GitHub release
