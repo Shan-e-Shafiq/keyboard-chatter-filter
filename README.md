@@ -104,13 +104,13 @@ registers and starts the service. To review the script first, run
 | Variable | Meaning |
 |---|---|
 | `KCF_REPO=owner/repo` | install from a fork (default `Shan-e-Shafiq/keyboard-chatter-filter`) |
-| `KCF_VERSION=v0.1.0` | a specific release instead of the latest |
+| `KCF_VERSION=v1.0.0` | a specific release instead of the latest |
 | `KCF_INSTALL_DIR=/path` | binary location (macOS/Linux) |
 | `KCF_VERIFY_ATTESTATION=1` | also verify the GitHub build-provenance attestation (needs the `gh` CLI, logged in with `gh auth login`) |
 | `KCF_ARCHIVE_DIR=/path` | offline install from a directory containing the release archive and `SHA256SUMS` |
 | `KCF_REQUIRE_SIGNATURE=1` | Windows: refuse binaries without a valid Authenticode signature |
 
-Example: `curl -fsSL …/install.sh | KCF_VERSION=v0.1.0 bash`.
+Example: `curl -fsSL …/install.sh | KCF_VERSION=v1.0.0 bash`.
 
 The URL is the repository's raw `main` branch, so a fork only has to change the repository in that
 URL (and `KCF_REPO`, or the default in the scripts). Every release also attaches copies of

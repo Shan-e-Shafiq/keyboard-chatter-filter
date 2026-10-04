@@ -19,7 +19,7 @@
 
     Environment variables (all optional):
         KCF_REPO               GitHub "owner/repo" to install from
-        KCF_VERSION            release tag, e.g. v0.1.0 (default: latest)
+        KCF_VERSION            release tag, e.g. v1.0.0 (default: latest)
         KCF_REQUIRE_SIGNATURE  1 = refuse binaries without a valid Authenticode signature
 #>
 $ErrorActionPreference = 'Stop'
@@ -30,7 +30,7 @@ function Install-KeyboardChatterFilter {
     $repo = if ($env:KCF_REPO) { $env:KCF_REPO } else { 'Shan-e-Shafiq/keyboard-chatter-filter' }
     $version = if ($env:KCF_VERSION) { $env:KCF_VERSION } else { 'latest' }
     if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw "KCF_REPO must look like owner/repo" }
-    if ($version -notmatch '^(latest|v[0-9A-Za-z.+-]+)$') { throw "KCF_VERSION must be 'latest' or a tag like v0.1.0" }
+    if ($version -notmatch '^(latest|v[0-9A-Za-z.+-]+)$') { throw "KCF_VERSION must be 'latest' or a tag like v1.0.0" }
 
     $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

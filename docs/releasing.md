@@ -7,11 +7,12 @@ for public repositories. Nothing is built on a developer machine.
 
 1. Update `VERSION` in `project(...)` in `CMakeLists.txt` and the `CHANGELOG.md` entry.
 2. Merge to `main`, wait for CI to pass.
-3. Tag and push:
+3. Tag and push (do not create the release in GitHub's web UI first; if one exists, the workflow
+   attaches the files to it):
 
    ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v1.0.0
+   git push origin v1.0.0
    ```
 
 4. `.github/workflows/release.yml` then:

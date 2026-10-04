@@ -8,7 +8,7 @@
 #
 # Environment variables (all optional):
 #   KCF_REPO               GitHub "owner/repo" to install from (default: Shan-e-Shafiq/keyboard-chatter-filter)
-#   KCF_VERSION            release tag, e.g. v0.1.0 (default: the latest release)
+#   KCF_VERSION            release tag, e.g. v1.0.0 (default: the latest release)
 #   KCF_INSTALL_DIR        binary location (default: ~/.local/bin on macOS, /usr/local/bin on Linux)
 #   KCF_VERIFY_ATTESTATION 1 = also verify the GitHub build-provenance attestation (needs the gh CLI,
 #                          logged in: gh attestation verify requires authentication)
@@ -83,7 +83,7 @@ main() {
     repo="${KCF_REPO:-$DEFAULT_REPO}"
     version="${KCF_VERSION:-latest}"
     [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "KCF_REPO must look like owner/repo"
-    [[ "$version" =~ ^(latest|v[0-9A-Za-z.+-]+)$ ]] || die "KCF_VERSION must be 'latest' or a tag like v0.1.0"
+    [[ "$version" =~ ^(latest|v[0-9A-Za-z.+-]+)$ ]] || die "KCF_VERSION must be 'latest' or a tag like v1.0.0"
 
     os="$(detect_os)"
     arch="$(detect_arch "$os")"

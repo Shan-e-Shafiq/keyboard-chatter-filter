@@ -3,7 +3,7 @@ name: Release
 # Builds signed-or-ad-hoc release binaries for every platform, tests them, and publishes them with
 # SHA-256 checksums and build-provenance attestations to a GitHub Release.
 #
-# Trigger: push a tag matching the version in CMakeLists.txt, e.g. `git tag v0.1.0 && git push origin v0.1.0`.
+# Trigger: push a tag matching the version in CMakeLists.txt, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
 # Manual runs (workflow_dispatch) build and upload workflow artifacts but do not publish a release.
 
 on:
@@ -185,11 +185,16 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
-      - name: Create GitHub release
+      - name: Create GitHub release (or add the files to one created in the web UI)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "keyboard-chatter-filter ${GITHUB_REF_NAME}" \
-            --generate-notes \
-            --verify-tag
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; uploading the assets to it"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "keyboard-chatter-filter ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --verify-tag
+          fi

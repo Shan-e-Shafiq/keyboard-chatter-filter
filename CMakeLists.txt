@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
 project(keyboard_chatter_filter
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Filters keyboard switch chatter (accidental duplicate keystrokes)"
     HOMEPAGE_URL "https://github.com/Shan-e-Shafiq/keyboard-chatter-filter"
     LANGUAGES CXX)
